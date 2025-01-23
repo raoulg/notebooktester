@@ -2,7 +2,6 @@ import json
 import multiprocessing
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -18,32 +17,35 @@ class NotebookTester:
         self,
         dir: Path,
         timeout: int = 600,
-        cache_dir: Path = Path(".__notebook_cache__"),
+        cache_dir: Optional[Path] = Path(".notebookcache"),
         verbose: bool = False,
+        force: bool = False,
     ):
         self.notebooks_dir = Path(dir)
         self.timeout = timeout
         self.verbose = verbose
         self.cache_dir = cache_dir
+        self.force = force
         if cache_dir:
+            logger.info(f"creating {cache_dir}")
             self.cache_dir = Path(cache_dir)
             self.cache_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            logger.info("no cache")
 
         # Setup logging
-        log_path = Path("logs/notebook_tests")
+        log_path = Path("logs/")
         log_path.mkdir(parents=True, exist_ok=True)
-        log_file = log_path / f"test_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-
+        log_file = log_path / "notebookstests.log"
         logger.remove()
-        if verbose:
-            logger.add(sys.stderr, level="INFO")
         logger.add(log_file, level="INFO")
+        logger.add(sys.stderr, level="SUCCESS" if not verbose else "INFO")
 
     def _get_cache_key(self, notebook_path: Path) -> str:
         return str(notebook_path.resolve()).replace("/", "_").replace("\\", "_")
 
     def _should_run_test(self, notebook_path: Path) -> bool:
-        if not self.cache_dir:
+        if self.force or not self.cache_dir:
             return True
 
         cache_key = self._get_cache_key(notebook_path)
@@ -75,6 +77,7 @@ class NotebookTester:
 
     def test_notebook(self, notebook_path: Path) -> Tuple[str, bool, str]:
         if not self._should_run_test(notebook_path):
+            assert self.cache_dir is not None
             cache_key = self._get_cache_key(notebook_path)
             with open(self.cache_dir / f"{cache_key}.json") as f:
                 cache = json.load(f)
@@ -115,6 +118,7 @@ class NotebookTester:
         notebooks = self.find_notebooks()
         if not max_workers:
             max_workers = multiprocessing.cpu_count()
+        logger.info(f"Running tests with {max_workers} workers")
 
         logger.info(f"Starting notebook tests - found {len(notebooks)} notebooks")
         successful = failed = 0
@@ -144,15 +148,25 @@ class NotebookTester:
 )
 @click.option("--workers", "-w", type=int, help="Number of parallel workers")
 @click.option(
-    "--cache-dir", "-c", type=click.Path(), help="Cache directory for test results"
+    "--cache-dir",
+    "-c",
+    default=".notebookcache",
+    type=click.Path(),
+    help="Cache directory for test results",
 )
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
-def main(path: str, timeout: int, workers: int, cache_dir: str, verbose: bool):
+@click.option(
+    "--force", "-f", is_flag=True, help="Ignore cache and force test execution"
+)
+def main(
+    path: str, timeout: int, workers: int, cache_dir: str, verbose: bool, force: bool
+):
     tester = NotebookTester(
         dir=Path(path),
         timeout=timeout,
         cache_dir=Path(cache_dir) if cache_dir else None,
         verbose=verbose,
+        force=force,
     )
     tester.run_tests(max_workers=workers)
 
