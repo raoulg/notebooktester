@@ -1,5 +1,6 @@
 import json
 import multiprocessing
+import signal
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -10,6 +11,10 @@ import nbformat
 from loguru import logger
 from nbconvert.preprocessors import ExecutePreprocessor
 from tqdm import tqdm
+
+
+class GracefulExit(Exception):
+    pass
 
 
 class NotebookTester:
@@ -33,13 +38,34 @@ class NotebookTester:
         else:
             logger.info("no cache")
 
+        self.executor = None
+        self.successful = 0
+        self.failed = 0
+        self.interrupted = False
+
         # Setup logging
         log_path = Path("logs/")
         log_path.mkdir(parents=True, exist_ok=True)
         log_file = log_path / "notebookstests.log"
         logger.remove()
-        logger.add(log_file, level="INFO")
-        logger.add(sys.stderr, level="SUCCESS" if not verbose else "INFO")
+        logger.level("TIMEOUT", no=20, color="<yellow>")
+        logger.add(log_file, level="DEBUG")
+        logger.add(sys.stderr, level="SUCCESS" if not verbose else "DEBUG")
+
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        signal.signal(signal.SIGINT, self._signal_handler)
+
+    def _signal_handler(self, signum, _):
+        """Handle termination signals gracefully"""
+        signal_name = signal.Signals(signum).name
+        logger.warning(f"\nReceived {signal_name}. Initiating graceful shutdown...")
+        self.interrupted = True
+
+        if self.executor:
+            logger.info("Shutting down executor...")
+            self.executor.shutdown(wait=False)
+
+        raise GracefulExit()
 
     def _get_cache_key(self, notebook_path: Path) -> str:
         return str(notebook_path.resolve()).replace("/", "_").replace("\\", "_")
@@ -57,7 +83,10 @@ class NotebookTester:
         with open(cache_file) as f:
             cache = json.load(f)
 
-        return notebook_path.stat().st_mtime > cache["last_run"]
+        # Always rerun if:
+        # 1. File was modified since last run
+        # 2. Previous test failed
+        return notebook_path.stat().st_mtime > cache["last_run"] or not cache["success"]
 
     def _update_cache(self, notebook_path: Path, success: bool, message: str):
         if not self.cache_dir:
@@ -88,6 +117,7 @@ class NotebookTester:
             )
 
         try:
+            logger.debug(f"Start testing notebook: {notebook_path}")
             with open(notebook_path) as f:
                 nb = nbformat.read(f, as_version=4)
 
@@ -121,24 +151,32 @@ class NotebookTester:
         logger.info(f"Running tests with {max_workers} workers")
 
         logger.info(f"Starting notebook tests - found {len(notebooks)} notebooks")
-        successful = failed = 0
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(self.test_notebook, nb): nb for nb in notebooks}
 
             with tqdm(total=len(notebooks), disable=self.verbose) as pbar:
                 for future in as_completed(futures):
-                    path, success, message = future.result()
-                    status = "✅ PASSED" if success else "❌ FAILED"
-                    successful += 1 if success else 0
-                    failed += 0 if success else 1
+                    try:
+                        path, success, message = future.result()
+                        if success:
+                            logger.info(f"✅ PASSED - {path}: {message}")
+                        elif "A cell timed out" in message:
+                            logger.log("TIMEOUT", f"⏰ TIMEOUT - {path}: {message}")
+                        else:
+                            logger.error(f"❌ FAILED - {path}: {message}")
 
-                    logger.info(f"{status} - {path}")
-                    if not success:
-                        logger.error(f"Error in {path}: {message}")
-                    pbar.update(1)
+                        self.successful += 1 if success else 0
+                        self.failed += 0 if success else 1
+                        pbar.update(1)
+                    except Exception as e:
+                        logger.error(f"Error processing future: {str(e)}")
+                        self.failed += 1
+                        pbar.update(1)
 
-        logger.info(f"\nTest Summary: {successful} passed, {failed} failed")
+        logger.success(
+            f"\nTest Summary: {self.successful} passed, {self.failed} failed"
+        )
 
 
 @click.command()
