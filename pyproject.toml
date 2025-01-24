@@ -17,6 +17,9 @@ dependencies = [
 [project.scripts]
 notebooktester = "notebooktester.cli:main"
 
+[tools.urls]
+GitHub = "https://github.com/raoulg/notebooktester"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
