@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-notebooktester = "notebooktester.cli:run_tests"
+notebooktester = "notebooktester.cli:main"
 
 [build-system]
 requires = ["hatchling"]
