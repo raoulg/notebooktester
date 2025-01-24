@@ -42,6 +42,7 @@ class NotebookTester:
         self.executor = None
         self.successful = 0
         self.failed = 0
+        self.no_more_time = 0
         self.interrupted = False
 
         # Setup logging
@@ -147,11 +148,11 @@ class NotebookTester:
                 except Exception as e:
                     logger.debug(f"Error shutting down kernel: {e}")
 
-    def test_notebook(self, notebook_path: Path) -> Tuple[str, bool, str]:
+    def test_notebook(self, notebook_path: Path) -> Tuple[str, bool, str, bool]:
         """Test a single notebook."""
         if not self._should_run_test(notebook_path):
             if self.cache_dir is None:  # Handle the case when cache_dir is None
-                return str(notebook_path), False, "No cache directory specified"
+                return str(notebook_path), False, "No cache directory specified", False
 
             cache_key = self._get_cache_key(notebook_path)
             try:
@@ -160,10 +161,11 @@ class NotebookTester:
                 return (
                     str(notebook_path),
                     cache["success"],
-                    f"[Cached] {cache['message']}",
+                    f"{cache['message']}",
+                    True,
                 )
             except Exception as e:
-                return str(notebook_path), False, f"Error reading cache: {e}"
+                return str(notebook_path), False, f"Error reading cache: {e}", False
 
         # Create new event loop for this thread
         loop = asyncio.new_event_loop()
@@ -189,7 +191,7 @@ class NotebookTester:
 
             success, message = loop.run_until_complete(run_and_cleanup())
             self._update_cache(notebook_path, success, message)
-            return str(notebook_path), success, message
+            return str(notebook_path), success, message, False
         finally:
             loop.close()
 
@@ -223,16 +225,17 @@ class NotebookTester:
                 with tqdm(total=len(notebooks), disable=self.verbose) as pbar:
                     for future in as_completed(futures):
                         try:
-                            path, success, message = future.result()
+                            path, success, message, cached = future.result()
                             if success:
-                                logger.info(f"✅ PASSED - {path}: {message}")
+                                status = "📦✅ CACHED" if cached else "✅ PASSED"
+                                logger.info(f"{status} - {path}: {message}")
+                                self.successful += 1
                             elif "A cell timed out" in message:
                                 logger.log("TIMEOUT", f"⏰ TIMEOUT - {path}: {message}")
+                                self.no_more_time += 1
                             else:
                                 logger.error(f"❌ FAILED - {path}: {message}")
-
-                            self.successful += 1 if success else 0
-                            self.failed += 0 if success else 1
+                                self.failed += 1
                             pbar.update(1)
                         except Exception as e:
                             logger.error(f"Error processing future: {str(e)}")
@@ -243,5 +246,5 @@ class NotebookTester:
             logger.warning("Graceful exit requested")
 
         logger.success(
-            f"\nTest Summary: {self.successful} passed, {self.failed} failed"
+            f"\nTest Summary: {self.successful} passed, {self.no_more_time} timed out, {self.failed} failed"
         )
