@@ -1,3 +1,4 @@
+import asyncio
 import json
 import multiprocessing
 import signal
@@ -83,6 +84,17 @@ class NotebookTester:
         with open(cache_file) as f:
             cache = json.load(f)
 
+        if cache["timeout"] >= self.timeout and "A cell timed out" in cache["message"]:
+            logger.debug(f"cache: {cache['timeout']}, current timeout {self.timeout}")
+            logger.warning(
+                f"[cache] notebook {notebook_path} timed out after {cache['timeout']}"
+            )
+            return False
+
+        if cache["timeout"] < self.timeout and "A cell timed out" in cache["message"]:
+            logger.debug(f"cache: {cache['timeout']}, current timeout {self.timeout}")
+            return True
+
         # Always rerun if:
         # 1. File was modified since last run
         # 2. Previous test failed
@@ -99,6 +111,7 @@ class NotebookTester:
             "last_run": notebook_path.stat().st_mtime,
             "success": success,
             "message": message,
+            "timeout": self.timeout,
         }
 
         with open(cache_file, "w") as f:
@@ -115,21 +128,37 @@ class NotebookTester:
                 cache["success"],
                 f"[Cached] {cache['message']}",
             )
-
+        ep = None
         try:
             logger.debug(f"Start testing notebook: {notebook_path}")
             with open(notebook_path) as f:
                 nb = nbformat.read(f, as_version=4)
 
             ep = ExecutePreprocessor(timeout=self.timeout, kernel_name="python3")
-            ep.preprocess(nb, {"metadata": {"path": notebook_path.parent}})
+            try:
+                ep.preprocess(nb, {"metadata": {"path": notebook_path.parent}})
+            except (KeyboardInterrupt, SystemExit) as e:
+                error_msg = "Kernel interrupted: " + str(e)
+                logger.error(
+                    f"KeyboardInterrupt or SystemExit {notebook_path}: {error_msg}"
+                )
+                self._update_cache(notebook_path, False, error_msg)
+                return (str(notebook_path), False, error_msg)
 
             self._update_cache(notebook_path, True, "Success")
             return (str(notebook_path), True, "Success")
         except Exception as e:
             error_msg = str(e)
+            logger.error(f"Error testing {notebook_path}: {error_msg}")
             self._update_cache(notebook_path, False, error_msg)
             return (str(notebook_path), False, error_msg)
+        finally:
+            # Ensure kernel cleanup happens even if there's an error
+            if ep and hasattr(ep, "km") and ep.km:
+                try:
+                    ep.km.shutdown_kernel(now=True)
+                except Exception as e:
+                    logger.debug(f"Error shutting down kernel: {str(e)}")
 
     def find_notebooks(self) -> List[Path]:
         """Find all notebooks in the specified directory"""
@@ -153,6 +182,7 @@ class NotebookTester:
         logger.info(f"Starting notebook tests - found {len(notebooks)} notebooks")
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            self.executor = executor
             futures = {executor.submit(self.test_notebook, nb): nb for nb in notebooks}
 
             with tqdm(total=len(notebooks), disable=self.verbose) as pbar:
@@ -173,6 +203,10 @@ class NotebookTester:
                         logger.error(f"Error processing future: {str(e)}")
                         self.failed += 1
                         pbar.update(1)
+                    finally:
+                        # Force cleanup of any pending asyncio tasks
+                        for task in asyncio.all_tasks():
+                            task.cancel()
 
         logger.success(
             f"\nTest Summary: {self.successful} passed, {self.failed} failed"
