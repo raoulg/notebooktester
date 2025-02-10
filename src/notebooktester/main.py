@@ -22,7 +22,7 @@ class NotebookTester:
     def __init__(
         self,
         dir: Path,
-        timeout: int = 600,
+        timeout: int = 60,
         cache_dir: Optional[Path] = Path(".notebookcache"),
         verbose: bool = False,
         force: bool = False,
@@ -44,19 +44,28 @@ class NotebookTester:
         self.failed = 0
         self.no_more_time = 0
         self.interrupted = False
-
-        # Setup logging
-        log_path = Path("logs/")
-        log_path.mkdir(parents=True, exist_ok=True)
-        log_file = log_path / "notebookstests.log"
-        logger.remove()
-        logger.level("TIMEOUT", no=20, color="<yellow>")
-        logger.add(log_file, level="DEBUG")
-        logger.add(sys.stderr, level="SUCCESS" if not verbose else "DEBUG")
+        self._setup_logging()
 
         # signal handler
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
+
+    def _setup_logging(self):
+        """Configure structured logging"""
+        log_path = Path("logs/")
+        log_path.mkdir(parents=True, exist_ok=True)
+        log_file = log_path / "notebookstests.log"
+
+        # Remove default logger
+        logger.remove()
+
+        # Add TIMEOUT level if it doesn't exist
+        if "TIMEOUT" not in logger._core.levels:  # type: ignore
+            logger.level("TIMEOUT", no=20, color="<yellow>")
+
+        # Add handlers
+        logger.add(log_file, level="DEBUG")
+        logger.add(sys.stderr, level="SUCCESS" if not self.verbose else "DEBUG")
 
     def _signal_handler(self, signum, _):
         """Handle termination signals gracefully"""
