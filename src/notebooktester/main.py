@@ -117,45 +117,70 @@ class NotebookTester:
         with open(cache_file, "w") as f:
             json.dump(cache_data, f)
 
-    async def _execute_notebook(self, notebook_path: Path) -> Tuple[bool, str]:
-        """Execute a single notebook asynchronously"""
-        with open(notebook_path) as f:
-            nb = nbformat.read(f, as_version=4)
+    async def _cleanup_notebook_client(self, client: Optional[NotebookClient]) -> None:
+        """Clean up notebook client resources asynchronously.
 
-        client = NotebookClient(
-            nb,
-            timeout=self.timeout,
-            kernel_name="python3",
-            resources={"metadata": {"path": notebook_path.parent}},
+        Args:
+            client: The notebook client to clean up
+        """
+        if not client:
+            return
+
+        async def _safe_stop_channels(kc):
+            """Safely stop kernel channels if they exist."""
+            if not kc:
+                return
+            try:
+                if hasattr(kc, "stop_channels"):
+                    if inspect.iscoroutinefunction(kc.stop_channels):
+                        await kc.stop_channels()
+                    else:
+                        kc.stop_channels()
+            except Exception as e:
+                logger.debug(f"Error stopping channels: {e}")
+
+        async def _safe_shutdown_kernel(km):
+            """Safely shutdown kernel if it exists."""
+            if not km:
+                return
+            try:
+                if hasattr(km, "shutdown_kernel"):
+                    # Add timeout to prevent hanging
+                    await asyncio.wait_for(
+                        asyncio.to_thread(km.shutdown_kernel, now=True), timeout=5.0
+                    )
+            except asyncio.TimeoutError:
+                logger.warning("Kernel shutdown timed out")
+            except Exception as e:
+                logger.debug(f"Error shutting down kernel: {e}")
+
+        # Run cleanup tasks concurrently
+        await asyncio.gather(
+            _safe_stop_channels(getattr(client, "kc", None)),
+            _safe_shutdown_kernel(getattr(client, "km", None)),
         )
 
+    async def _execute_notebook(self, notebook_path: Path) -> Tuple[bool, str]:
+        """Execute a single notebook asynchronously"""
+        client = None
         try:
+            with open(notebook_path) as f:
+                nb = nbformat.read(f, as_version=4)
+
+            client = NotebookClient(
+                nb,
+                timeout=self.timeout,
+                kernel_name="python3",
+                resources={"metadata": {"path": notebook_path.parent}},
+            )
+
             await client.async_execute()
             return True, "Success"
         except Exception as e:
             return False, str(e)
         finally:
-            # Only call async methods if they exist
-            if (
-                hasattr(client, "kc")
-                and client.kc
-                and hasattr(client.kc, "stop_channels")
-                and inspect.iscoroutinefunction(client.kc.stop_channels)
-            ):
-                try:
-                    await client.kc.stop_channels()
-                except Exception as e:
-                    logger.debug(f"Error stopping channels: {e}")
-
-            if (
-                hasattr(client, "km")
-                and client.km
-                and hasattr(client.km, "shutdown_kernel")
-            ):
-                try:
-                    client.km.shutdown_kernel(now=True)
-                except Exception as e:
-                    logger.debug(f"Error shutting down kernel: {e}")
+            if client:
+                await self._cleanup_notebook_client(client)
 
     def test_notebook(self, notebook_path: Path) -> Tuple[str, bool, str, bool]:
         """Test a single notebook."""
