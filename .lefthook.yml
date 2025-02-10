@@ -1,0 +1,14 @@
+pre-commit:
+  commands:
+    isort:
+      files: git ls-files
+      glob: '*.{py}'
+      run: isort {staged_files}
+      stage_fixed: true
+    ruff:
+      files: git ls-files
+      glob: '*.py'
+      run: ruff check {staged_files} --fix
+    pyright:
+      glob: '*.py'
+      run: pyright {staged_files}
