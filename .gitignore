@@ -12,3 +12,4 @@ logs/
 .notebookcache
 test.ipynb
 .DS_Store
+.coverage
