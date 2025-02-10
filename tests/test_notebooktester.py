@@ -1,26 +1,25 @@
 # tests/test_notebooktester.py
 
 
-import pytest
 import ray
 
 from notebooktester.main import NotebookTester
 
-
-@pytest.fixture
-def notebook_tester(test_notebooks_dir, test_cache_dir):
-    """Create a NotebookTester instance with short timeout"""
-    tester = NotebookTester(
-        dir=test_notebooks_dir,
-        timeout=5,  # Short timeout for testing
-        cache_dir=test_cache_dir,
-        verbose=True,
-    )
-    yield tester
-
-    # Ensure ray is shut down after each test
-    if ray.is_initialized():
-        ray.shutdown()
+#
+# @pytest.fixture
+# def notebook_tester(test_notebooks_dir, test_cache_dir):
+#     """Create a NotebookTester instance with short timeout"""
+#     tester = NotebookTester(
+#         dir=test_notebooks_dir,
+#         timeout=5,  # Short timeout for testing
+#         cache_dir=test_cache_dir,
+#         verbose=True,
+#     )
+#     yield tester
+#
+#     # Ensure ray is shut down after each test
+#     if ray.is_initialized():
+#         ray.shutdown()
 
 
 def test_basic_notebook_execution(notebook_tester, test_notebooks_dir):

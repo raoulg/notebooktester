@@ -5,7 +5,9 @@ import shutil
 from pathlib import Path
 
 import pytest
+import ray
 
+from notebooktester.main import NotebookTester
 from tests.helpers.notebook_creator import NotebookCreator
 
 os.environ["JUPYTER_PLATFORM_DIRS"] = "1"
@@ -39,3 +41,19 @@ def test_cache_dir():
 
     # Cleanup after tests
     shutil.rmtree(cache_dir)
+
+
+@pytest.fixture
+def notebook_tester(test_notebooks_dir, test_cache_dir):
+    """Create a NotebookTester instance with short timeout"""
+    tester = NotebookTester(
+        dir=test_notebooks_dir,
+        timeout=5,  # Short timeout for testing
+        cache_dir=test_cache_dir,
+        verbose=True,
+    )
+    yield tester
+
+    # Ensure ray is shut down after each test
+    if ray.is_initialized():
+        ray.shutdown()
