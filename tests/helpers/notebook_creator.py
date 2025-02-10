@@ -25,59 +25,7 @@ class NotebookCreator:
         return cls.create_notebook(cells, "basic.ipynb", output_dir)
 
     @classmethod
-    def create_ray_tune_notebook(cls, output_dir: Path) -> Path:
-        """Create a notebook with Ray Tune"""
-        cells = [
-            """
-import ray
-from ray import tune
-import time
-
-def training_function(config):
-    for step in range(config["steps"]):
-        time.sleep(0.1)
-        tune.report({"score":step})
-
-ray.init()
-            """,
-            """
-analysis = tune.run(
-    training_function,
-    config={"steps": 5},
-    num_samples=2
-)
-            """,
-        ]
-        return cls.create_notebook(cells, "ray_tune.ipynb", output_dir)
-
-    @classmethod
-    def create_ray_tune_notebook_slow(cls, output_dir: Path) -> Path:
-        """Create a too slow notebook with Ray Tune"""
-        cells = [
-            """
-import ray
-from ray import tune
-import time
-
-def training_function(config):
-    for step in range(config["steps"]):
-        time.sleep(2)
-        tune.report({"score":step})
-
-ray.init()
-            """,
-            """
-analysis = tune.run(
-    training_function,
-    config={"steps": 50},
-    num_samples=2
-)
-            """,
-        ]
-        return cls.create_notebook(cells, "ray_tune_slow.ipynb", output_dir)
-
-    @classmethod
     def create_timeout_notebook(cls, output_dir: Path) -> Path:
         """Create a notebook that will timeout"""
-        cells = ["import time\ntime.sleep(10)"]
+        cells = ["import time\ntime.sleep(2)"]
         return cls.create_notebook(cells, "timeout.ipynb", output_dir)

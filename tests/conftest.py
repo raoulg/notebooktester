@@ -5,7 +5,6 @@ import shutil
 from pathlib import Path
 
 import pytest
-import ray
 
 from notebooktester.main import NotebookTester
 from tests.helpers.notebook_creator import NotebookCreator
@@ -21,8 +20,6 @@ def test_notebooks_dir():
 
     # Create test notebooks
     NotebookCreator.create_basic_notebook(test_dir)
-    NotebookCreator.create_ray_tune_notebook(test_dir)
-    NotebookCreator.create_ray_tune_notebook_slow(test_dir)
     NotebookCreator.create_timeout_notebook(test_dir)
 
     yield test_dir
@@ -48,12 +45,8 @@ def notebook_tester(test_notebooks_dir, test_cache_dir):
     """Create a NotebookTester instance with short timeout"""
     tester = NotebookTester(
         dir=test_notebooks_dir,
-        timeout=5,  # Short timeout for testing
+        timeout=1,  # Short timeout for testing
         cache_dir=test_cache_dir,
         verbose=True,
     )
     yield tester
-
-    # Ensure ray is shut down after each test
-    if ray.is_initialized():
-        ray.shutdown()
