@@ -2,7 +2,7 @@ from pathlib import Path
 
 import click
 
-from .main import NotebookTester
+from notebooktester.main import NotebookTester
 
 
 @click.command()
@@ -33,3 +33,7 @@ def main(
         force=force,
     )
     tester.run_tests(max_workers=workers)
+
+
+if __name__ == "__main__":
+    main()
