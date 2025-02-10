@@ -17,9 +17,30 @@ dependencies = [
 [project.scripts]
 notebooktester = "notebooktester.cli:main"
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.3",
+    "ray[tune]>=2.42.0",
+]
+
 [tools.urls]
 GitHub = "https://github.com/raoulg/notebooktester"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "isort>=6.0.0",
+    "pyright>=1.1.393",
+    "ruff>=0.9.5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
