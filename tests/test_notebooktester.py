@@ -11,6 +11,7 @@ def test_basic_notebook_execution(notebook_tester, test_notebooks_dir):
     assert result.success is True
     assert "Success" in result.message
     assert result.cached is False
+    assert result.execution_time < result.timeout  # Should be faster
 
 
 def test_cached_execution(notebook_tester, test_notebooks_dir):
@@ -30,20 +31,32 @@ def test_timeout_handling(notebook_tester, test_notebooks_dir, test_cache_dir):
 
     assert result.success is False
     assert "timed out" in result.message.lower()
+    assert result.execution_time == float("inf")
 
     patient_tester = NotebookTester(
         dir=test_notebooks_dir, timeout=5, cache_dir=test_cache_dir, force=False
     )
     result2 = patient_tester.test_notebook(timeout_nb)
     assert result2.success is True  # Should succeed with longer timeout
+    assert result2.execution_time < result2.timeout
+
+
+def test_failing_notebook(notebook_tester, test_notebooks_dir):
+    """Test that notebooks with errors fail appropriately"""
+    failing_nb = test_notebooks_dir / "failing.ipynb"
+    result = notebook_tester.test_notebook(failing_nb)
+
+    assert result.success is False
+    assert result.cached is False
+    assert result.execution_time == float("inf")
 
 
 def test_find_notebooks(notebook_tester):
     """Test that notebook discovery works correctly"""
     notebooks = notebook_tester.find_notebooks()
 
-    # Should find all three test notebooks
-    assert len(notebooks) == 2
+    # Should find all test notebooks
+    assert len(notebooks) == 3
 
     # All found files should be .ipynb files
     assert all(nb.suffix == ".ipynb" for nb in notebooks)

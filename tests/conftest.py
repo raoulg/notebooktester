@@ -1,6 +1,5 @@
 # tests/conftest.py
 
-import os
 import shutil
 from pathlib import Path
 
@@ -8,8 +7,6 @@ import pytest
 
 from notebooktester.main import NotebookTester
 from tests.helpers.notebook_creator import NotebookCreator
-
-os.environ["JUPYTER_PLATFORM_DIRS"] = "1"
 
 
 @pytest.fixture(scope="session")
@@ -21,6 +18,7 @@ def test_notebooks_dir():
     # Create test notebooks
     NotebookCreator.create_basic_notebook(test_dir)
     NotebookCreator.create_timeout_notebook(test_dir)
+    NotebookCreator.create_failing_notebook(test_dir)
 
     yield test_dir
 

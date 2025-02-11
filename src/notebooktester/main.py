@@ -18,15 +18,23 @@ from tqdm import tqdm
 
 @dataclass
 class NotebookStats:
+    notebook_path: Path
     last_modified: float
     success: bool
     message: str
     timeout: int
     execution_time: float
+    cached: bool
+
+    def to_dict(self):
+        # Convert the dataclass to a dict, with Path converted to string
+        d = asdict(self)
+        d["notebook_path"] = str(d["notebook_path"])
+        return d
 
     def save_to_cache(self, cache_file: Path):
         with cache_file.open("w") as f:
-            json.dump(asdict(self), f)
+            json.dump(self.to_dict(), f)
 
 
 @dataclass
@@ -184,44 +192,59 @@ class NotebookTester:
 
             await client.async_execute()
             return NotebookStats(
+                notebook_path=notebook_path,
                 last_modified=notebook_path.stat().st_mtime,
                 success=True,
                 message="Success",
                 timeout=self.timeout,
                 execution_time=time.time() - start_time,
+                cached=False,
             )
         except Exception as e:
             return NotebookStats(
+                notebook_path=notebook_path,
                 last_modified=notebook_path.stat().st_mtime,
                 success=False,
                 message=str(e),
                 timeout=self.timeout,
                 execution_time=float("inf"),
+                cached=False,
             )
 
         finally:
             if client:
                 await self._cleanup_notebook_client(client)
 
-    def test_notebook(self, notebook_path: Path) -> TestResult:
+    def test_notebook(self, notebook_path: Path) -> NotebookStats:
         """Test a single notebook."""
         if not self._should_run_test(notebook_path):
             if self.cache_dir is None:  # Handle the case when cache_dir is None
-                return TestResult(notebook_path, False, "No cache dir found", False)
+                return NotebookStats(
+                    notebook_path=notebook_path,
+                    last_modified=notebook_path.stat().st_mtime,
+                    success=False,
+                    message="No cache dir found",
+                    timeout=self.timeout,
+                    execution_time=float("inf"),
+                    cached=False,
+                )
 
             cache_key = self._get_cache_key(notebook_path)
             try:
                 with open(self.cache_dir / f"{cache_key}.json") as f:
                     cache = json.load(f)
-                return TestResult(
-                    notebook_path,
-                    cache["success"],
-                    f"{cache['message']}",
-                    True,
-                )
+                cache["cached"] = True
+                return NotebookStats(**cache)
+
             except Exception as e:
-                return TestResult(
-                    notebook_path, False, f"Error reading cache: {e}", False
+                return NotebookStats(
+                    notebook_path=notebook_path,
+                    last_modified=notebook_path.stat().st_mtime,
+                    success=False,
+                    message=f"Error reading cache: {e}",
+                    timeout=self.timeout,
+                    execution_time=float("inf"),
+                    cached=False,
                 )
 
         # Create new event loop for this thread
@@ -247,17 +270,10 @@ class NotebookTester:
                                 pass
 
             result = loop.run_until_complete(run_and_cleanup())
-            stats = NotebookStats(
-                last_modified=notebook_path.stat().st_mtime,
-                success=result.success,
-                message=result.message,
-                timeout=result.timeout,
-                execution_time=result.execution_time,
-            )
-            stats.save_to_cache(
+            result.save_to_cache(
                 self.cache_dir / f"{self._get_cache_key(notebook_path)}.json"
             )
-            return TestResult(notebook_path, result.success, result.message, False)
+            return result
         finally:
             loop.close()
 
@@ -295,13 +311,13 @@ class NotebookTester:
                             if result.success:
                                 status = "📦✅ CACHED" if result.cached else "✅ PASSED"
                                 logger.info(
-                                    f"{status} - {result.notebook_path}: {result.message}"
+                                    f"{status} - {result.notebook_path}: {result.message} ({result.execution_time:.2f}s)"
                                 )
                                 self.successful += 1
                             elif "A cell timed out" in result.message:
                                 logger.log(
                                     "TIMEOUT",
-                                    f"⏰ TIMEOUT - {result.notebook_path}: {result.message}",
+                                    f"⏰ TIMEOUT - {result.notebook_path}: {result.message} (>{result.timeout}s)",
                                 )
                                 self.no_more_time += 1
                             else:

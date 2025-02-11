@@ -29,3 +29,11 @@ class NotebookCreator:
         """Create a notebook that will timeout"""
         cells = ["import time\ntime.sleep(2)"]
         return cls.create_notebook(cells, "timeout.ipynb", output_dir)
+
+    @classmethod
+    def create_failing_notebook(cls, output_dir: Path) -> Path:
+        """Create a notebook that will fail due to syntax and runtime errors"""
+        cells = [
+            "# Runtime error\n1/0",  # Division by zero
+        ]
+        return cls.create_notebook(cells, "failing.ipynb", output_dir)
