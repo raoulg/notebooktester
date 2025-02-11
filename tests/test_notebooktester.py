@@ -7,11 +7,10 @@ def test_basic_notebook_execution(notebook_tester, test_notebooks_dir):
     """Test execution of a simple notebook"""
     basic_nb = test_notebooks_dir / "basic.ipynb"
     result = notebook_tester.test_notebook(basic_nb)
-    _, success, message, cached = result
 
-    assert success is True
-    assert "Success" in message
-    assert cached is False
+    assert result.success is True
+    assert "Success" in result.message
+    assert result.cached is False
 
 
 def test_cached_execution(notebook_tester, test_notebooks_dir):
@@ -20,24 +19,23 @@ def test_cached_execution(notebook_tester, test_notebooks_dir):
 
     # Second execution should use cache
     result2 = notebook_tester.test_notebook(basic_nb)
-    assert result2[3] is True  # Should be cached
-    assert result2[1] is True  # Should still be successful
+    assert result2.cached is True  # Should be cached
+    assert result2.success is True  # Should still be successful
 
 
 def test_timeout_handling(notebook_tester, test_notebooks_dir, test_cache_dir):
     """Test that notebooks that take too long timeout properly"""
     timeout_nb = test_notebooks_dir / "timeout.ipynb"
     result = notebook_tester.test_notebook(timeout_nb)
-    _, success, message, _ = result
 
-    assert success is False
-    assert "timed out" in message.lower()
+    assert result.success is False
+    assert "timed out" in result.message.lower()
 
     patient_tester = NotebookTester(
         dir=test_notebooks_dir, timeout=5, cache_dir=test_cache_dir, force=False
     )
     result2 = patient_tester.test_notebook(timeout_nb)
-    assert result2[1] is True  # Should succeed with longer timeout
+    assert result2.success is True  # Should succeed with longer timeout
 
 
 def test_find_notebooks(notebook_tester):
@@ -78,8 +76,8 @@ def test_force_rerun(test_notebooks_dir, test_cache_dir):
     basic_nb = test_notebooks_dir / "basic.ipynb"
 
     result2 = normal_tester.test_notebook(basic_nb)
-    assert result2[3] is True  # Second run, should be cached
+    assert result2.cached is True  # Second run, should be cached
 
     # Run with force=True
     result3 = force_tester.test_notebook(basic_nb)
-    assert result3[3] is False  # Should not use cache when forced
+    assert result3.cached is False  # Should not use cache when forced

@@ -4,14 +4,37 @@ import json
 import multiprocessing
 import signal
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import nbformat
 from loguru import logger
 from nbclient import NotebookClient
 from tqdm import tqdm
+
+
+@dataclass
+class NotebookStats:
+    last_modified: float
+    success: bool
+    message: str
+    timeout: int
+    execution_time: float
+
+    def save_to_cache(self, cache_file: Path):
+        with cache_file.open("w") as f:
+            json.dump(asdict(self), f)
+
+
+@dataclass
+class TestResult:
+    notebook_path: Path
+    success: bool
+    message: str
+    cached: bool
 
 
 class GracefulExit(Exception):
@@ -23,7 +46,7 @@ class NotebookTester:
         self,
         dir: Path,
         timeout: int = 60,
-        cache_dir: Optional[Path] = Path(".notebookcache"),
+        cache_dir: Path = Path(".notebookcache"),
         verbose: bool = False,
         force: bool = False,
     ):
@@ -32,12 +55,8 @@ class NotebookTester:
         self.verbose = verbose
         self.cache_dir = cache_dir
         self.force = force
-        if cache_dir:
-            logger.info(f"creating {cache_dir}")
-            self.cache_dir = Path(cache_dir)
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            logger.info("no cache")
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.executor = None
         self.successful = 0
@@ -83,39 +102,27 @@ class NotebookTester:
         return str(notebook_path.resolve()).replace("/", "_").replace("\\", "_")
 
     def _should_run_test(self, notebook_path: Path) -> bool:
+        # if force, alway run
         if self.force or not self.cache_dir:
             return True
 
         cache_key = self._get_cache_key(notebook_path)
         cache_file = self.cache_dir / f"{cache_key}.json"
 
+        # if there is no cache file, always run
         if not cache_file.exists():
             return True
 
         with open(cache_file) as f:
-            cache = json.load(f)
+            cache = NotebookStats(**json.load(f))
 
-        if cache["timeout"] >= self.timeout and "A cell timed out" in cache["message"]:
-            logger.debug(f"cache: {cache['timeout']}, current timeout {self.timeout}")
+        # if it timed out last time, and the timeout value didnt increase, dont run
+        if cache.timeout >= self.timeout and "A cell timed out" in cache.message:
+            logger.debug(f"cache: {cache.timeout}, current timeout {self.timeout}")
             return False
 
-        return notebook_path.stat().st_mtime > cache["last_run"] or not cache["success"]
-
-    def _update_cache(self, notebook_path: Path, success: bool, message: str):
-        if not self.cache_dir:
-            return
-
-        cache_key = self._get_cache_key(notebook_path)
-        cache_file = self.cache_dir / f"{cache_key}.json"
-        cache_data = {
-            "last_run": notebook_path.stat().st_mtime,
-            "success": success,
-            "message": message,
-            "timeout": self.timeout,
-        }
-
-        with open(cache_file, "w") as f:
-            json.dump(cache_data, f)
+        # run if changed, or failed
+        return notebook_path.stat().st_mtime > cache.last_modified or not cache.success
 
     async def _cleanup_notebook_client(self, client: Optional[NotebookClient]) -> None:
         """Clean up notebook client resources asynchronously.
@@ -147,7 +154,7 @@ class NotebookTester:
                 if hasattr(km, "shutdown_kernel"):
                     # Add timeout to prevent hanging
                     await asyncio.wait_for(
-                        asyncio.to_thread(km.shutdown_kernel, now=True), timeout=5.0
+                        asyncio.to_thread(km.shutdown_kernel, now=True), timeout=2.0
                     )
             except asyncio.TimeoutError:
                 logger.warning("Kernel shutdown timed out")
@@ -160,10 +167,11 @@ class NotebookTester:
             _safe_shutdown_kernel(getattr(client, "km", None)),
         )
 
-    async def _execute_notebook(self, notebook_path: Path) -> Tuple[bool, str]:
+    async def _execute_notebook(self, notebook_path: Path) -> NotebookStats:
         """Execute a single notebook asynchronously"""
         client = None
         try:
+            start_time = time.time()
             with open(notebook_path) as f:
                 nb = nbformat.read(f, as_version=4)
 
@@ -175,31 +183,46 @@ class NotebookTester:
             )
 
             await client.async_execute()
-            return True, "Success"
+            return NotebookStats(
+                last_modified=notebook_path.stat().st_mtime,
+                success=True,
+                message="Success",
+                timeout=self.timeout,
+                execution_time=time.time() - start_time,
+            )
         except Exception as e:
-            return False, str(e)
+            return NotebookStats(
+                last_modified=notebook_path.stat().st_mtime,
+                success=False,
+                message=str(e),
+                timeout=self.timeout,
+                execution_time=float("inf"),
+            )
+
         finally:
             if client:
                 await self._cleanup_notebook_client(client)
 
-    def test_notebook(self, notebook_path: Path) -> Tuple[str, bool, str, bool]:
+    def test_notebook(self, notebook_path: Path) -> TestResult:
         """Test a single notebook."""
         if not self._should_run_test(notebook_path):
             if self.cache_dir is None:  # Handle the case when cache_dir is None
-                return str(notebook_path), False, "No cache directory specified", False
+                return TestResult(notebook_path, False, "No cache dir found", False)
 
             cache_key = self._get_cache_key(notebook_path)
             try:
                 with open(self.cache_dir / f"{cache_key}.json") as f:
                     cache = json.load(f)
-                return (
-                    str(notebook_path),
+                return TestResult(
+                    notebook_path,
                     cache["success"],
                     f"{cache['message']}",
                     True,
                 )
             except Exception as e:
-                return str(notebook_path), False, f"Error reading cache: {e}", False
+                return TestResult(
+                    notebook_path, False, f"Error reading cache: {e}", False
+                )
 
         # Create new event loop for this thread
         loop = asyncio.new_event_loop()
@@ -209,8 +232,8 @@ class NotebookTester:
             # Run the execution in a way that lets us clean up while loop is still running
             async def run_and_cleanup():
                 try:
-                    success, message = await self._execute_notebook(notebook_path)
-                    return success, message
+                    result: NotebookStats = await self._execute_notebook(notebook_path)
+                    return result
                 finally:
                     # Cancel any remaining tasks while loop is still running
                     for task in asyncio.all_tasks():
@@ -223,9 +246,18 @@ class NotebookTester:
                             except asyncio.CancelledError:
                                 pass
 
-            success, message = loop.run_until_complete(run_and_cleanup())
-            self._update_cache(notebook_path, success, message)
-            return str(notebook_path), success, message, False
+            result = loop.run_until_complete(run_and_cleanup())
+            stats = NotebookStats(
+                last_modified=notebook_path.stat().st_mtime,
+                success=result.success,
+                message=result.message,
+                timeout=result.timeout,
+                execution_time=result.execution_time,
+            )
+            stats.save_to_cache(
+                self.cache_dir / f"{self._get_cache_key(notebook_path)}.json"
+            )
+            return TestResult(notebook_path, result.success, result.message, False)
         finally:
             loop.close()
 
@@ -259,16 +291,23 @@ class NotebookTester:
                 with tqdm(total=len(notebooks), disable=self.verbose) as pbar:
                     for future in as_completed(futures):
                         try:
-                            path, success, message, cached = future.result()
-                            if success:
-                                status = "📦✅ CACHED" if cached else "✅ PASSED"
-                                logger.info(f"{status} - {path}: {message}")
+                            result = future.result()
+                            if result.success:
+                                status = "📦✅ CACHED" if result.cached else "✅ PASSED"
+                                logger.info(
+                                    f"{status} - {result.notebook_path}: {result.message}"
+                                )
                                 self.successful += 1
-                            elif "A cell timed out" in message:
-                                logger.log("TIMEOUT", f"⏰ TIMEOUT - {path}: {message}")
+                            elif "A cell timed out" in result.message:
+                                logger.log(
+                                    "TIMEOUT",
+                                    f"⏰ TIMEOUT - {result.notebook_path}: {result.message}",
+                                )
                                 self.no_more_time += 1
                             else:
-                                logger.error(f"❌ FAILED - {path}: {message}")
+                                logger.error(
+                                    f"❌ FAILED - {result.notebook_path}: {result.message}"
+                                )
                                 self.failed += 1
                             pbar.update(1)
                         except Exception as e:
