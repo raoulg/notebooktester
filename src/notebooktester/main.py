@@ -126,7 +126,6 @@ class NotebookTester:
 
         # if it timed out last time, and the timeout value didnt increase, dont run
         if cache.timeout >= self.timeout and "A cell timed out" in cache.message:
-            logger.debug(f"cache: {cache.timeout}, current timeout {self.timeout}")
             return False
 
         # run if changed, or failed
